@@ -1,593 +1,368 @@
-# Decentralized Exchange (DEX) - Automated Market Maker
+# DEX AMM: A Uniswap V2-Style Decentralized Exchange
 
-A production-ready Uniswap V2-style decentralized exchange (DEX) built with Solidity, featuring automated market making (AMM), liquidity pools, token swaps, and multi-hop routing.
+![Solidity](https://img.shields.io/badge/Solidity-0.8.28-363636?logo=solidity&logoColor=white)
+![Hardhat](https://img.shields.io/badge/Hardhat-3-FFF100?logo=hardhat&logoColor=black)
+![OpenZeppelin](https://img.shields.io/badge/OpenZeppelin-5.x-4E5EE4)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-## 🎯 Overview
+**A set of Ethereum smart contracts that let people swap ERC-20 tokens directly with each other, with no order book and no middleman.**
 
-This DEX implements a **constant product market maker** (x * y = k) allowing users to:
-- 💧 **Provide Liquidity** - Earn 0.3% fees on all swaps
-- 🔄 **Swap Tokens** - Trade any ERC20 token with minimal slippage
-- 🛣️ **Multi-hop Swaps** - Route through multiple pairs (A → B → C)
-- 📊 **Price Discovery** - Automated pricing based on supply/demand
+Instead of matching buyers with sellers, this exchange uses **liquidity pools**: shared piles of two tokens that anyone can trade against. A simple formula sets the price based on how much of each token is in the pool. People who deposit tokens into a pool (liquidity providers) earn a share of a 0.3% fee on every swap.
 
----
+The design follows Uniswap V2 and is split into three contracts:
 
-## 🚀 Key Features
+- **`DEXFactory`** creates and keeps a registry of trading pairs.
+- **`DEXPair`** is one pool for one pair of tokens. It holds the reserves, mints LP tokens, and executes swaps.
+- **`DEXRouter`** is the friendly front door: add or remove liquidity, swap tokens, and route a trade through several pools.
 
-### Core Functionality
+> **Status:** this is a learning and portfolio project. It has **not been audited**. Use it on a local network or a testnet only, never with real funds.
 
-#### 1. **Liquidity Pools**
-- Create pools for any ERC20 token pair
-- Receive LP (Liquidity Provider) tokens as proof of deposit
-- Earn proportional share of 0.3% swap fees
-- Remove liquidity anytime
+<details>
+<summary><b>New to DeFi? Key terms in plain English</b></summary>
 
-#### 2. **Automated Market Making**
-- Constant product formula: `x * y = k`
-- No order books needed
-- Instant price quotes
-- Continuous liquidity
+- **DEX (decentralized exchange):** a trading app made of smart contracts instead of a company.
+- **ERC-20:** the standard for fungible tokens (tokens that are all identical, like currencies).
+- **AMM (automated market maker):** software that sets prices with a formula instead of an order book.
+- **Liquidity pool:** a contract holding reserves of two tokens that traders swap against.
+- **LP token:** a receipt you get for depositing into a pool. You burn it to get your share back.
+- **Slippage:** the gap between the price you expected and the price you actually got. You set a limit so a trade fails rather than fill at a bad price.
+- **Path:** the list of tokens a trade passes through, for example A → B → C.
+- **Price:** in a pool, the price of one token is the reserve of the other token divided by its own reserve.
 
-#### 3. **Token Swaps**
-- Swap any token for any other token
-- 0.3% fee distributed to liquidity providers
-- Slippage protection
-- Price impact calculation
-
-#### 4. **Router Smart Contract**
-- User-friendly interface for all operations
-- Multi-hop swap routing
-- Optimal path finding
-- Deadline protection
-
-### Advanced Features
-
-- ✅ **Gas Optimized** - Efficient storage patterns
-- ✅ **Reentrancy Protected** - OpenZeppelin ReentrancyGuard
-- ✅ **Minimum Liquidity Lock** - Prevents manipulation
-- ✅ **Fee-on-Transfer Support** - Compatible with reflection tokens
-- ✅ **Emergency Functions** - Skim & Sync for edge cases
+</details>
 
 ---
 
-## 📋 Smart Contracts Architecture
+## Technologies
+
+- **Solidity 0.8.28** with the optimizer on (200 runs)
+- **Hardhat 3** for compiling, testing, and deploying
+- **OpenZeppelin Contracts 5.x**: `ERC20`, `ReentrancyGuard`, `Math`
+- **ethers.js 6** for the tests and the deploy script
+- **Mocha + Chai** for the test suite
+- **TypeScript** for the Hardhat configuration
+
+---
+
+## Features
+
+**Liquidity pools**
+- Create a pool for any two ERC-20 tokens (one pool per pair, enforced by the factory)
+- The first deposit sets the starting price
+- Deposit both tokens and receive LP tokens; burn them any time to withdraw your share
+- The first 1,000 units of LP tokens are permanently locked, which protects against a known price-manipulation trick on empty pools
+- The router creates a missing pool automatically when you add liquidity
+
+**Swaps**
+- Swap an exact amount in (`swapExactTokensForTokens`) or ask for an exact amount out (`swapTokensForExactTokens`)
+- Multi-hop routing through several pools, for example A → B → C
+- A 0.3% fee on every swap, which stays in the pool and grows the liquidity providers' share
+- Slippage limits on every swap and every liquidity deposit
+- Read-only price functions: `getAmountsOut`, `getAmountsIn`, `quote`
+
+**Safety and quality**
+- Reentrancy guards on every state-changing function in the pair and the router
+- A check after every swap that the pool's "k" value did not decrease
+- Events for every important action (`PairCreated`, `Mint`, `Burn`, `Swap`, `Sync`, `LiquidityAdded`, `LiquidityRemoved`, `TokensSwapped`)
+- 23 test cases covering the factory, liquidity, swaps, multi-hop swaps, and price impact
+- A mintable `ERC20Token` for testing (anyone can mint, so it is for local use only)
+
+---
+
+## What Users Can Do
+
+| Who | What they can do |
+|-----|------------------|
+| **Liquidity provider** | Approve the router, deposit two tokens into a pool, and receive LP tokens. Later, return the LP tokens to get the tokens back, including the fees earned. |
+| **Trader** | Approve the router, then swap one token for another, either directly or through several pools. |
+| **Developer / integrator** | Read prices and reserves with `getAmountsOut`, `getReserves`, and `getPair` before sending a transaction. |
+| **Anyone** | Call `sync` on a pool to refresh its reserves, or `skim` to pull out any tokens that were sent to a pool by mistake. |
+
+<details>
+<summary><b>Code examples (ethers v6)</b></summary>
+
+**Add liquidity**
+
+```js
+const routerAddress = await router.getAddress();
+
+// The router must be allowed to move your tokens
+await tokenA.approve(routerAddress, ethers.parseEther("100"));
+await tokenB.approve(routerAddress, ethers.parseEther("100"));
+
+await router.addLiquidity(
+  await tokenA.getAddress(),
+  await tokenB.getAddress(),
+  ethers.parseEther("100"),  // amountADesired
+  ethers.parseEther("100"),  // amountBDesired
+  ethers.parseEther("95"),   // amountAMin (allows 5% slippage)
+  ethers.parseEther("95"),   // amountBMin
+  user.address               // who receives the LP tokens
+);
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    User Interface                        │
-│              (Web3 / Ethers.js Integration)             │
-└─────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────┐
-│                     DEXRouter.sol                        │
-│  • Add/Remove Liquidity                                 │
-│  • Swap Tokens                                          │
-│  • Multi-hop Routing                                    │
-│  • Price Calculations                                   │
-└─────────────────────────────────────────────────────────┘
-                            │
-                ┌───────────┴───────────┐
-                ▼                       ▼
-┌───────────────────────┐   ┌──────────────────────────┐
-│   DEXFactory.sol      │   │     DEXPair.sol          │
-│  • Create Pairs       │──▶│  • Liquidity Pool Logic  │
-│  • Track All Pairs    │   │  • Token Swapping        │
-│  • Pair Registry      │   │  • LP Token Minting      │
-└───────────────────────┘   │  • Fee Distribution      │
-                            └──────────────────────────┘
+
+**Swap tokens (with a 0.5% slippage limit)**
+
+```js
+const path = [await tokenA.getAddress(), await tokenB.getAddress()];
+const amountIn = ethers.parseEther("10");
+
+await tokenA.approve(routerAddress, amountIn);
+
+const amounts = await router.getAmountsOut(amountIn, path);
+const minOut = (amounts[1] * 995n) / 1000n;
+
+await router.swapExactTokensForTokens(amountIn, minOut, path, user.address);
 ```
 
-### Contract Details
+**Multi-hop swap (A → B → C):** use a three-token path, `[tokenA, tokenB, tokenC]`, and read the final amount from `amounts[2]`.
 
-#### **DEXFactory.sol**
-- Creates new trading pairs
-- Maintains registry of all pairs
-- Ensures one pair per token combination
-- Emits PairCreated events
+**Remove liquidity**
 
-#### **DEXPair.sol** (Core AMM Logic)
-- Implements ERC20 (LP tokens)
-- Manages liquidity reserves
-- Executes token swaps
-- Distributes fees to LPs
-- Maintains k constant
+```js
+const pairAddress = await factory.getPair(tokenAAddress, tokenBAddress);
+const lpToken = await ethers.getContractAt("DEXPair", pairAddress);
+const liquidity = await lpToken.balanceOf(user.address);
 
-#### **DEXRouter.sol** (User Interface)
-- Simplifies interactions
-- Handles approvals
-- Routes multi-hop swaps
-- Calculates optimal amounts
-- Provides slippage protection
+await lpToken.approve(routerAddress, liquidity);
+await router.removeLiquidity(tokenAAddress, tokenBAddress, liquidity, 0, 0, user.address);
+```
 
-#### **ERC20Token.sol** (For Testing)
-- Standard ERC20 implementation
-- Mintable for testing
-- OpenZeppelin based
+</details>
 
 ---
 
-## 🛠️ Technology Stack
+## Keyboard Shortcuts
 
-- **Solidity**: ^0.8.20
-- **Hardhat**: 3.1.5 (Development framework)
-- **OpenZeppelin**: 5.x (Secure contract libraries)
-- **Node.js**: v18+
-- **Ethers.js**: v6 (Web3 library)
+Not applicable. This project is smart contracts and has no keyboard-driven interface. The terminal commands you will use most are listed in [How to Run](#how-to-run).
 
 ---
 
-## 📦 Installation
+## The Process
 
-### Prerequisites
+**How the three contracts fit together**
+
+```mermaid
+flowchart TD
+    U["User or app"] --> R["DEXRouter<br/>liquidity and swaps"]
+    R -->|"getPair / createPair"| F["DEXFactory<br/>registry of pairs"]
+    F -->|"deploys one per token pair"| P["DEXPair<br/>reserves, LP tokens, swaps"]
+    R -->|"mint / burn / swap"| P
+```
+
+**What happens during a swap**
+
+```mermaid
+sequenceDiagram
+    participant U as Trader
+    participant R as DEXRouter
+    participant P as DEXPair
+    U->>R: swapExactTokensForTokens(amountIn, minOut, path, to)
+    R->>R: Work out the output after the 0.3% fee
+    R->>R: Revert if output is below minOut
+    R->>P: Move the input tokens into the pair
+    R->>P: swap(amount0Out, amount1Out, to)
+    P->>P: Check that k did not decrease
+    P->>U: Send the output tokens
+```
+
+**The price formula**
+
+Each pool keeps the product of its two reserves constant: `x * y = k`. When a trader adds tokens to one side, the pool gives back just enough of the other side to keep that product from shrinking. This is why large trades move the price more than small ones.
+
+With the 0.3% fee, the output is:
+
+```
+amountOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
+```
+
+**Worked example**
+
+A pool holds 1,000 A and 2,000 B (so k = 2,000,000). A trader swaps 100 A:
+
+- Fee-adjusted input: 100 × 0.997 = 99.7 A
+- Output: (99.7 × 2,000) / (1,000 + 99.7) ≈ **181.32 B**
+- New reserves: 1,100 A and about 1,818.68 B
+- New k: about 2,000,546, which is higher than before because the fee stays in the pool
+
+<details>
+<summary><b>Good to know: price impact, slippage, and impermanent loss</b></summary>
+
+- **Price impact** grows with trade size. Before fees, a trade worth 1% of the input reserve moves the price by about 1%, 10% by about 9%, and 50% by about 33%.
+- **Slippage limits** (`amountOutMin`, `amountInMax`) make a trade revert if the price moves against you between sending and execution.
+- **Impermanent loss:** liquidity providers can end up with less value than if they had simply held the tokens when prices move. For example, deposit 1 ETH and 2,000 USDC, and if ETH doubles to 4,000 USDC, the pool position is worth about $5,657 versus $6,000 for holding, a loss of about 5.7%. Fees can offset this.
+
+</details>
+
+---
+
+## How I Built It
+
+I followed the Uniswap V2 design, which splits the work across three contracts so each one stays small and focused. The contracts build on OpenZeppelin's token and security libraries instead of reinventing them.
+
+Design decisions worth knowing:
+
+- **The router sends tokens first, the pair measures what arrived.** The pair does not pull tokens in. It compares its balance with its saved reserves to see how much was deposited, then does the math.
+- **A "k" safety check on every swap.** After sending the output, the pair confirms that the fee-adjusted product of its balances did not drop. If it did, the whole swap reverts.
+- **Fees stay in the pool.** The 0.3% is never paid out separately. It simply makes the reserves grow, so LP tokens are worth more over time.
+- **Locked minimum liquidity.** The first provider receives `sqrt(amount0 * amount1) - 1000` LP tokens, and 1,000 units are sent to `address(1)` forever.
+- **Integer maths only.** Solidity has no decimals, so the fee is written as 997/1000 and rounding is handled carefully (`getAmountIn` rounds up by one so the pool is never short).
+- **Reentrancy protection.** OpenZeppelin's `ReentrancyGuard` protects every state-changing function in the pair and the router.
+- **Open maintenance functions.** `skim` and `sync` can be called by anyone, as in Uniswap V2. Tokens sent to a pool by mistake can be taken by whoever calls `skim` first.
+
+<details>
+<summary><b>Project structure</b></summary>
+
+```
+dex-amm/
+├── contracts/
+│   ├── DEXFactory.sol    # Creates pairs and keeps the registry
+│   ├── DEXPair.sol       # The pool: reserves, LP tokens, swaps, price math
+│   ├── DEXRouter.sol     # User-facing: liquidity, swaps, multi-hop routing
+│   └── ERC20Token.sol    # Test token (anyone can mint)
+├── scripts/
+│   └── deploy.js         # Deploys everything and sets up two sample pools
+├── test/
+│   └── DEX.test.js       # 23 test cases
+├── hardhat.config.ts     # Compiler settings
+├── TECHNICAL.md          # Deeper technical walkthrough
+└── package.json
+```
+
+</details>
+
+<details>
+<summary><b>Function reference</b></summary>
+
+**DEXFactory**
+
+| Function | What it does |
+|----------|--------------|
+| `createPair(tokenA, tokenB)` | Deploys a new pair (reverts if tokens are identical, zero, or the pair exists) |
+| `getPair(tokenA, tokenB)` | Returns the pair address (works in either token order) |
+| `allPairs(index)` / `allPairsLength()` | Lists every pair created |
+
+**DEXRouter**
+
+| Function | What it does |
+|----------|--------------|
+| `addLiquidity(...)` | Deposits both tokens at the right ratio and mints LP tokens (creates the pair if needed) |
+| `removeLiquidity(...)` | Burns LP tokens and returns both tokens |
+| `swapExactTokensForTokens(...)` | Swaps an exact input amount along a path |
+| `swapTokensForExactTokens(...)` | Swaps whatever input is needed to get an exact output amount |
+| `getAmountsOut(...)` / `getAmountsIn(...)` | Previews amounts along a path |
+| `quote(...)` | Works out the matching amount of the other token at the current ratio |
+
+**DEXPair**
+
+| Function | What it does |
+|----------|--------------|
+| `mint(to)` / `burn(to)` | Low-level liquidity functions, normally called by the router |
+| `swap(amount0Out, amount1Out, to)` | Low-level swap, normally called by the router |
+| `getReserves()` | Returns the two reserves |
+| `getAmountOut(...)` / `getAmountIn(...)` / `quote(...)` | Pure price calculations |
+| `skim(to)` / `sync()` | Maintenance functions for tokens sent in by mistake |
+
+</details>
+
+For more depth, see [TECHNICAL.md](TECHNICAL.md).
+
+---
+
+## What I Learned
+
+> Edit these so they sound like you. They are based on how the project is built.
+
+- **How an AMM prices trades.** The constant-product formula replaces an order book, and fees quietly increase `k`.
+- **Why the first deposit is special.** The first provider sets the price, and locking a small amount of LP tokens stops the pool from being manipulated when it is nearly empty.
+- **Router versus pair.** Keeping the risky low-level logic in the pair and the user-friendly checks (slippage, ratios) in the router made each part easier to reason about.
+- **Integer maths in Solidity.** Fees, rounding direction, and overflow all need deliberate handling when there are no decimals.
+- **Reentrancy and invariants.** A guard plus an "after the swap, k must not drop" check is a simple, powerful safety pattern.
+- **Being honest about limits.** Writing down what the contracts do not do (see below) is part of building secure software.
+
+---
+
+## How It Could Be Improved
+
+These are known limits of the current version.
+
+- **Add a transaction deadline.** The router has no deadline parameter, so a transaction that sits pending can execute later at a worse price.
+- **Support ETH.** Only ERC-20 to ERC-20 trading works. Adding wrapped ETH (WETH) support would allow ETH pools.
+- **Support fee-on-transfer tokens.** The router calculates amounts before the transfer, so tokens that take a fee on transfer make swaps revert.
+- **Use `SafeERC20`.** Token transfers do not check return values, so some non-standard tokens would not work or could fail silently.
+- **Add a price oracle.** Pools do not record cumulative prices (TWAP), so on-chain prices can be manipulated and should not be used as a price feed by other contracts.
+- **Add route finding.** The caller must supply the path. A helper (off-chain or in a library) could search for the best route.
+- **Make pair addresses predictable.** Deploying pairs with `CREATE2` would let apps compute a pair's address without calling the factory.
+- **Test more.** Add tests for how fees are shared between several liquidity providers, plus fuzz and invariant tests, a coverage report, and static analysis (for example Slither).
+- **Build a frontend.** A React app using ethers.js or wagmi would make the exchange usable without scripts.
+- **Get an independent audit** before anything touches real funds.
+
+---
+
+## How to Run
+
+**Prerequisites**
+- Node.js **22.10 or higher** (required by Hardhat 3)
+- npm (comes with Node.js)
+
 ```bash
-node -v  # Should be v18 or higher
-npm -v   # Should be v9 or higher
+node -v
+npm -v
 ```
 
-### Setup
+**1. Clone the repository**
+
 ```bash
-# Clone the repository
-git clone <repository-url>
+git clone https://github.com/DesaiSakshi1/dex-amm.git
 cd dex-amm
+```
 
-# Install dependencies
+**2. Install dependencies**
+
+```bash
 npm install
+```
 
-# Compile contracts
+**3. Compile the contracts**
+
+```bash
 npx hardhat compile
 ```
 
----
+**4. Run the tests**
 
-## 🧪 Testing
-
-### Run Test Suite
 ```bash
 npx hardhat test
 ```
 
-### Test Coverage
-The test suite includes:
-- ✅ Factory pair creation
-- ✅ Liquidity addition/removal
-- ✅ Token swaps (single & multi-hop)
-- ✅ Price impact calculations
-- ✅ Fee distribution
-- ✅ Edge cases & error handling
-- ✅ Gas optimization verification
+**5. Deploy to the local Hardhat network**
 
----
-
-## 🚀 Deployment
-
-### Local Network
 ```bash
 npx hardhat run scripts/deploy.js
 ```
 
-### Testnet (Sepolia)
+The deploy script sets up a ready-to-use demo: it deploys the factory and router, creates three test tokens (TKA, TKB, TKC), opens two pools (TKA/TKB and TKB/TKC) with 10,000 of each token, previews a sample swap, and saves every address to `deployment-info.json`.
+
+**6. Deploy to a testnet (for example Sepolia)**
+
+Add a network entry to `hardhat.config.ts` with an RPC URL and your account key, then run:
+
 ```bash
 npx hardhat run scripts/deploy.js --network sepolia
 ```
 
-### Mainnet
-```bash
-npx hardhat run scripts/deploy.js --network mainnet
-```
-
-**Note**: Update `hardhat.config.ts` with network configurations and private keys.
+Keep your private key and RPC URL in environment variables or a `.env` file that is listed in `.gitignore`. Never commit them. Do not deploy this project to mainnet.
 
 ---
 
-## 💡 Usage Examples
+## Demo Video
 
-### 1. Create a Liquidity Pool
-```javascript
-import { ethers } from 'ethers';
+[![Watch the demo](YOUR_THUMBNAIL_IMAGE_URL)](YOUR_VIDEO_URL)
 
-// Connect to contracts
-const factory = new ethers.Contract(factoryAddress, factoryABI, signer);
-const router = new ethers.Contract(routerAddress, routerABI, signer);
-
-// Create new pair
-const tx = await factory.createPair(tokenA.address, tokenB.address);
-await tx.wait();
-
-const pairAddress = await factory.getPair(tokenA.address, tokenB.address);
-console.log("Pair created:", pairAddress);
-```
-
-### 2. Add Liquidity
-```javascript
-// Approve tokens
-await tokenA.approve(router.address, amountA);
-await tokenB.approve(router.address, amountB);
-
-// Add liquidity
-const tx = await router.addLiquidity(
-    tokenA.address,
-    tokenB.address,
-    ethers.parseEther("100"),    // amountADesired
-    ethers.parseEther("100"),    // amountBDesired
-    ethers.parseEther("95"),     // amountAMin (5% slippage)
-    ethers.parseEther("95"),     // amountBMin
-    userAddress                   // recipient of LP tokens
-);
-
-await tx.wait();
-console.log("Liquidity added!");
-```
-
-### 3. Swap Tokens
-```javascript
-// Approve token
-await tokenA.approve(router.address, amountIn);
-
-// Get expected output
-const path = [tokenA.address, tokenB.address];
-const amounts = await router.getAmountsOut(ethers.parseEther("10"), path);
-console.log("Expected output:", ethers.formatEther(amounts[1]));
-
-// Execute swap
-const tx = await router.swapExactTokensForTokens(
-    ethers.parseEther("10"),     // amountIn
-    amounts[1] * 95n / 100n,     // amountOutMin (5% slippage)
-    path,                         // token path
-    userAddress                   // recipient
-);
-
-await tx.wait();
-console.log("Swap completed!");
-```
-
-### 4. Multi-hop Swap (A → B → C)
-```javascript
-// Approve token A
-await tokenA.approve(router.address, amountIn);
-
-// Define path through multiple pools
-const path = [
-    tokenA.address,
-    tokenB.address,
-    tokenC.address
-];
-
-// Get expected output
-const amounts = await router.getAmountsOut(ethers.parseEther("10"), path);
-
-// Execute multi-hop swap
-const tx = await router.swapExactTokensForTokens(
-    ethers.parseEther("10"),
-    amounts[2] * 95n / 100n,  // 5% slippage on final output
-    path,
-    userAddress
-);
-
-await tx.wait();
-console.log("Multi-hop swap completed!");
-```
-
-### 5. Remove Liquidity
-```javascript
-// Get LP token balance
-const lpToken = new ethers.Contract(pairAddress, pairABI, signer);
-const liquidity = await lpToken.balanceOf(userAddress);
-
-// Approve LP tokens
-await lpToken.approve(router.address, liquidity);
-
-// Remove liquidity
-const tx = await router.removeLiquidity(
-    tokenA.address,
-    tokenB.address,
-    liquidity,
-    0,  // amountAMin
-    0,  // amountBMin
-    userAddress
-);
-
-await tx.wait();
-console.log("Liquidity removed!");
-```
+_A short walkthrough: running the tests, deploying locally, and doing a swap and a multi-hop swap against the sample pools._
 
 ---
 
-## 🧮 How the AMM Works
+## License
 
-### Constant Product Formula
-
-The DEX uses the **constant product market maker** formula:
-```
-x * y = k
-```
-
-Where:
-- `x` = Reserve of Token A
-- `y` = Reserve of Token B
-- `k` = Constant product (always increases due to fees)
-
-### Price Calculation
-```
-Price of A in terms of B = y / x
-Price of B in terms of A = x / y
-```
-
-### Swap Output Calculation
-```javascript
-amountOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
-```
-
-The `997/1000` factor accounts for the 0.3% fee.
-
-### Example:
-
-**Pool State:**
-- Reserve A: 1000 tokens
-- Reserve B: 2000 tokens
-- k = 1000 * 2000 = 2,000,000
-
-**Swap 100 A for B:**
-```
-Input: 100 A (after 0.3% fee: 99.7 A)
-reserveIn = 1000
-reserveOut = 2000
-
-amountOut = (99.7 * 2000) / (1000 + 99.7)
-amountOut = 199,400 / 1099.7 ≈ 181.3 B
-```
-
-**New Pool State:**
-- Reserve A: 1100 tokens
-- Reserve B: 1818.7 tokens  
-- k = 1,100 * 1818.7 ≈ 2,000,570 (increased due to fees!)
-
----
-
-## 💰 Fee Structure
-
-### Swap Fees
-- **0.3%** fee on all swaps
-- Distributed proportionally to liquidity providers
-- Automatically added to reserves (compound effect)
-
-### Example Fee Distribution:
-
-**Pool with 2 LPs:**
-- LP1: 70% of pool → Earns 70% of fees
-- LP2: 30% of pool → Earns 30% of fees
-
-**Fee Accumulation:**
-- 100 swaps of 10 tokens each = 1000 tokens volume
-- Total fees: 1000 * 0.003 = 3 tokens
-- LP1 earns: 3 * 0.70 = 2.1 tokens
-- LP2 earns: 3 * 0.30 = 0.9 tokens
-
----
-
-## 🔒 Security Features
-
-### 1. Reentrancy Protection
-```solidity
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
-contract DEXPair is ReentrancyGuard {
-    function swap(...) external nonReentrant {
-        // Protected from reentrancy attacks
-    }
-}
-```
-
-### 2. K Value Verification
-```solidity
-require(
-    balance0Adjusted * balance1Adjusted >= reserve0 * reserve1 * (1000**2),
-    "K value check failed"
-);
-```
-
-### 3. Minimum Liquidity Lock
-```solidity
-uint256 public constant MINIMUM_LIQUIDITY = 10**3;
-
-// First liquidity provider
-liquidity = sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
-_mint(address(1), MINIMUM_LIQUIDITY); // Permanently locked
-```
-
-### 4. Input Validation
-- All amounts validated > 0
-- Slippage checks
-- Deadline protection
-- Token approval verification
-
-### 5. Safe Math
-- Solidity 0.8+ automatic overflow protection
-- Explicit checks for critical calculations
-
----
-
-## 📊 Gas Optimization
-
-### Techniques Used:
-
-1. **Storage Optimization**
-   - Packed variables in structs
-   - Minimal storage writes
-   - Use of memory for temporary data
-
-2. **Calculation Efficiency**
-   - Pre-calculated constants
-   - Optimized loops
-   - Batch operations
-
-3. **Event Logging**
-   - Indexed parameters for filtering
-   - Minimal data in events
-
-### Gas Costs (Approximate):
-
-| Operation | Gas Cost |
-|-----------|----------|
-| Create Pair | ~1,500,000 |
-| Add Liquidity (first time) | ~250,000 |
-| Add Liquidity (subsequent) | ~150,000 |
-| Remove Liquidity | ~120,000 |
-| Single Swap | ~100,000 |
-| Multi-hop Swap (2 hops) | ~180,000 |
-
-*Costs vary based on network conditions and token implementations*
-
----
-
-## 🎓 Technical Concepts
-
-### Impermanent Loss
-
-When you provide liquidity, you're exposed to **impermanent loss** - the difference between holding tokens vs. providing liquidity.
-
-**Example:**
-- Deposit: 1 ETH + 2000 USDC (1 ETH = 2000 USDC)
-- ETH price doubles: 1 ETH = 4000 USDC
-- Your share: 0.707 ETH + 2828 USDC = $5656
-- If you had held: 1 ETH + 2000 USDC = $6000
-- **Impermanent Loss**: $344 (5.7%)
-
-**Mitigation:**
-- Trading fees can offset impermanent loss
-- Provide liquidity for stable pairs
-- Consider price volatility
-
-### Price Impact
-
-Large trades cause **price impact** - the difference between expected and actual price:
-```
-Price Impact = (Expected Price - Actual Price) / Expected Price * 100%
-```
-
-**Example:**
-- Small trade (1% of pool): ~0.03% price impact
-- Medium trade (10% of pool): ~3% price impact
-- Large trade (50% of pool): ~33% price impact
-
-### Slippage
-
-**Slippage** is the acceptable difference between expected and minimum acceptable output:
-```javascript
-amountOutMin = expectedOutput * (100 - slippageTolerance) / 100
-```
-
-**Common Settings:**
-- 0.1% - Stablecoins
-- 0.5% - Major tokens
-- 1-5% - Volatile tokens
-
----
-
-## 🚨 Known Limitations
-
-1. **No Oracle Integration**
-   - Vulnerable to price manipulation
-   - Consider adding Chainlink oracles for production
-
-2. **No Flash Loan Protection**
-   - Large instant trades can manipulate prices
-   - Consider adding TWAP (Time-Weighted Average Price)
-
-3. **Gas Costs**
-   - Multi-hop swaps can be expensive
-   - Consider Layer 2 deployment
-
-4. **Impermanent Loss**
-   - LPs exposed to IL on volatile pairs
-   - Education and warnings needed
-
----
-
-## 🔮 Future Enhancements
-
-### Planned Features:
-
-1. **Concentrated Liquidity** (Uniswap V3 style)
-   - Custom price ranges
-   - Capital efficiency
-
-2. **Fee Tiers**
-   - 0.01%, 0.05%, 0.3%, 1%
-   - Different tiers for different pairs
-
-3. **Oracle Integration**
-   - Chainlink price feeds
-   - TWAP implementation
-   - Flash loan protection
-
-4. **Governance Token**
-   - DAO governance
-   - Fee distribution to token holders
-   - Protocol upgrades
-
-5. **Limit Orders**
-   - Off-chain order matching
-   - On-chain settlement
-
-6. **Layer 2 Support**
-   - Optimism
-   - Arbitrum
-   - zkSync
-
----
-
-## 📚 Resources
-
-### Learn More:
-- [Uniswap V2 Whitepaper](https://uniswap.org/whitepaper.pdf)
-- [Automated Market Makers](https://docs.uniswap.org/concepts/protocol/introduction)
-- [Solidity Documentation](https://docs.soliditylang.org/)
-- [OpenZeppelin Contracts](https://docs.openzeppelin.com/contracts)
-
-### Related Projects:
-- [Uniswap](https://uniswap.org)
-- [SushiSwap](https://sushi.com)
-- [PancakeSwap](https://pancakeswap.finance)
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-## 👨‍💻 Developer
-
-**Portfolio Project** demonstrating:
-- ✅ Advanced Solidity development
-- ✅ DeFi protocol design
-- ✅ AMM implementation
-- ✅ Gas optimization
-- ✅ Security best practices
-- ✅ Production-ready code
-
-**Built for blockchain developer job applications** 🚀
-
----
-
-**Status**: ✅ Production-Ready (Testnet deployment recommended before mainnet)
-
-**Created**: February 2026
-
-**Solidity Version**: 0.8.28
-
----
-
-*This DEX demonstrates professional-grade DeFi development suitable for senior blockchain engineer positions.*
+Released under the MIT License.
